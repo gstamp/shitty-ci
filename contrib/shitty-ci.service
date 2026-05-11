@@ -1,0 +1,10 @@
+[Unit]
+Description=shitty-ci daemon
+After=network-online.target
+
+[Service]
+ExecStart=%h/go/bin/shitty-ci server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
