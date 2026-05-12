@@ -145,6 +145,9 @@ func main() {
 		all := false
 		fs.BoolVar(&all, "all", false, "list builds from all tracked repos (ignore cwd-based default filter)")
 		limit := fs.Int("limit", 50, "max rows")
+		watch := false
+		fs.BoolVar(&watch, "watch", false, "keep polling and redrawing (Ctrl+C to stop)")
+		fs.BoolVar(&watch, "w", false, "alias for --watch")
 		_ = fs.Parse(os.Args[2:])
 
 		repoFilter := strings.TrimSpace(*repo)
@@ -171,20 +174,66 @@ func main() {
 			}
 		}
 
-		resp, err := cli.RPC(proto.Request{Cmd: "builds_list", Repo: repoFilter, Limit: *limit})
-		mustRPC(resp, err)
-		raw, err := json.Marshal(resp.Data)
+		fetchBuilds := func() ([]types.Build, error) {
+			resp, err := cli.RPC(proto.Request{Cmd: "builds_list", Repo: repoFilter, Limit: *limit})
+			if err != nil {
+				return nil, err
+			}
+			if !resp.OK {
+				return nil, fmt.Errorf("%s", resp.Error)
+			}
+			raw, err := json.Marshal(resp.Data)
+			if err != nil {
+				return nil, err
+			}
+			var bd proto.BuildsData
+			if err := json.Unmarshal(raw, &bd); err != nil {
+				return nil, err
+			}
+			return bd.Builds, nil
+		}
+
+		builds, err := fetchBuilds()
 		if err != nil {
 			fatal(err)
 		}
-		var bd proto.BuildsData
-		if err := json.Unmarshal(raw, &bd); err != nil {
-			fatal(err)
-		}
-		cli.PrintBuilds(os.Stdout, bd.Builds, cli.StdoutUseColor(), cli.StdoutIsTerminal())
+		cli.PrintBuilds(os.Stdout, builds, cli.StdoutUseColor(), cli.StdoutIsTerminal())
 		if usedCwdDefault && cli.StdoutIsTerminal() {
 			fmt.Fprintln(os.Stdout)
 			cli.PrintBuildsCwdHint(os.Stdout, cli.StdoutUseColor())
+		}
+
+		if !watch {
+			break
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+
+		isTerm := cli.StdoutIsTerminal()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				builds, err := fetchBuilds()
+				if err != nil {
+					continue
+				}
+				if isTerm {
+					fmt.Print("\033[H\033[J")
+				} else {
+					fmt.Println("---")
+				}
+				cli.PrintBuilds(os.Stdout, builds, cli.StdoutUseColor(), isTerm)
+				if usedCwdDefault && isTerm {
+					fmt.Fprintln(os.Stdout)
+					cli.PrintBuildsCwdHint(os.Stdout, cli.StdoutUseColor())
+				}
+			}
 		}
 	case "logs":
 		fs := flag.NewFlagSet("logs", flag.ExitOnError)
