@@ -174,7 +174,3 @@ Failure descriptions are **short** (GitHub caps them at **140 characters**), but
 
 - Treat `config.yml` as a **secret** if it contains a PAT.
 - The daemon runs **shell commands from your repo’s YAML** on the host. Only track repositories you trust, same as any self-hosted runner.
-
-## Design doc
-
-See `docs/plan.html` for the full design rationale and behavior notes.
