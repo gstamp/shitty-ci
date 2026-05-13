@@ -3,6 +3,7 @@ module shitty-ci
 go 1.22
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.6.1
 	github.com/mattn/go-isatty v0.0.20
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.34.5

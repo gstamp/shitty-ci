@@ -110,13 +110,24 @@ Add a file at the repository root, versioned with your code:
 
 ```yaml
 # Optional: restrict which remote branches build (default: all branches)
+# Legacy: OR together a list of globs (see glob rules below)
 # branches:
 #   - main
 #   - "release/*"
 
+# Optional: build every branch except a short deny-list (include/exclude)
+# branches:
+#   include: ["**"]
+#   exclude: [main, staging, production]
+
 # Optional: opt in to tag builds (default: no tag builds)
 # tags:
 #   - "v*"
+
+# tags also supports include/exclude:
+# tags:
+#   include: ["v*"]
+#   exclude: ["v0.*"]
 
 steps:
   - name: Build
@@ -134,6 +145,9 @@ steps:
 
 **Semantics:**
 
+- Branch and tag filters use [doublestar](https://github.com/bmatcuk/doublestar) globs: `*` matches within one `/`-separated segment, and `**` matches across segments (so `**` is the usual “any branch name” pattern when you use slashes in branch names).
+- Omit `branches:` to build **all** remote branches. A legacy empty list (`branches: []`) is treated the same way. Omit `tags:` (or use `tags: []`) to skip tag builds.
+- `branches:` / `tags:` may instead be a mapping with required `include:` and optional `exclude:` lists. A ref matches when it matches **any** glob in `include` and matches **none** of the `exclude` globs.
 - Steps run **sequentially** via `sh -c "<run>"` in the workspace directory.
 - Each step process also receives **`SHITTY_CI_REF`** (full git ref for this build, for example `refs/remotes/origin/main`), **`SHITTY_CI_SHA`** (the checked-out commit), and **`SHITTY_CI_REPO`** (`owner/name`). These are appended **after** the optional `env:` map so they always reflect the actual queued build (even if the YAML reused those names).
 - First non-zero exit marks the build failed; later steps are skipped.
