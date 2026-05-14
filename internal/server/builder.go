@@ -188,7 +188,37 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 	a.postGitHub(job.Owner, job.Name, job.SHA, "pending", "Build in progress")
 	logBuildRunningSteps(buildID, job)
 
-	for i, step := range sf.Steps {
+	runnable := make([]shittyyml.Step, 0, len(sf.Steps))
+	for _, step := range sf.Steps {
+		ok, err := step.ShouldRunRef(job.Ref)
+		if err != nil {
+			now := time.Now().Unix()
+			msg := fmt.Sprintf("invalid step ref filter: %v", err)
+			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, msg, started, now)
+			a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("Invalid step filters: %v", err), buildID))
+			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("step %q: %s", step.Name, msg), buildClock)
+			return
+		}
+		if !ok {
+			name := strings.TrimSpace(step.Name)
+			if name == "" {
+				name = "(unnamed)"
+			}
+			fmt.Fprintf(logf, "skipping step %q (branch/tag filters)\n", name)
+			continue
+		}
+		runnable = append(runnable, step)
+	}
+	if len(runnable) == 0 {
+		now := time.Now().Unix()
+		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildSuccess, "", "all steps skipped (step branch/tag filters)", now, now)
+		fmt.Fprintf(logf, "\n== finished: success (no matching steps) ==\n")
+		a.postGitHub(job.Owner, job.Name, job.SHA, "success", gh.StatusDescriptionWithLogsHint("All steps skipped (ref filters)", buildID))
+		logBuildDone(buildID, job, types.BuildSuccess, "all steps skipped (step branch/tag filters)", buildClock)
+		return
+	}
+
+	for i, step := range runnable {
 		if step.Run == "" {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, "empty run command", started, now)
@@ -198,7 +228,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		}
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildRunning, step.Name, "", started, 0)
 		a.postGitHub(job.Owner, job.Name, job.SHA, "pending", gh.StatusDescriptionWithLogsHint("Running: "+step.Name, buildID))
-		logBuildStepProgress(buildID, job, i+1, len(sf.Steps), step.Name)
+		logBuildStepProgress(buildID, job, i+1, len(runnable), step.Name)
 
 		secretEnv, err := db.GetRepoSecrets(ctx, a.db, job.RepoID)
 		if err != nil {

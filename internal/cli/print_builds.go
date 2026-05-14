@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/mattn/go-isatty"
 	"shitty-ci/internal/types"
 )
+
+var ansiRe = regexp.MustCompile(`\033\[[0-9;]*m`)
 
 // StdoutUseColor reports whether ANSI styling is appropriate for stdout.
 func StdoutUseColor() bool {
@@ -51,24 +53,23 @@ func PrintBuilds(w io.Writer, builds []types.Build, color, tips bool) {
 		return
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "BUILD\tREPO\tSHA\tREF\tCREATED\tSTATE")
+	fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-12s  %-40s  %s\n",
+		"BUILD", "REPO", "SHA", "REF", "STATE", "CREATED")
 
 	for _, b := range builds {
 		created := "-"
 		if b.CreatedAt != 0 {
 			created = time.Unix(b.CreatedAt, 0).Local().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		stateCell := a.stateWithStep(b.State, b.Step)
+		fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-12s  %s\n",
 			shortBuildID(b.ID),
 			b.Repo,
 			shortSHA(b.SHA),
 			shortRef(b.Ref),
-			created,
-			a.state(b.State),
+			padVisible(stateCell, 40)+"  "+created,
 		)
 	}
-	_ = tw.Flush()
 
 	if !tips {
 		return
@@ -96,6 +97,16 @@ func shortBuildID(id string) string {
 		return id
 	}
 	return id[:8]
+}
+
+// padVisible right-pads a string (possibly containing ANSI escape codes) to the
+// given visible width by ignoring escape sequences in length calculations.
+func padVisible(s string, width int) string {
+	visible := ansiRe.ReplaceAllString(s, "")
+	if len(visible) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(visible))
 }
 
 func shortRef(ref string) string {

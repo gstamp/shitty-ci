@@ -237,7 +237,7 @@ func LastBuildForRepo(ctx context.Context, dbConn *sql.DB, repoID int64) (types.
 
 func ListBuilds(ctx context.Context, dbConn *sql.DB, repoFull string, limit int) ([]types.Build, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = 25
 	}
 	var rows *sql.Rows
 	var err error

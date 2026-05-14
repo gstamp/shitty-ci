@@ -235,3 +235,95 @@ steps:
 		t.Fatalf("tag v0: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestStepShouldRunRefNoFilters(t *testing.T) {
+	s := &Step{Name: "x", Run: "true"}
+	for _, ref := range []string{"refs/remotes/origin/main", "refs/tags/v1.0.0"} {
+		ok, err := s.ShouldRunRef(ref)
+		if err != nil || !ok {
+			t.Fatalf("ref %q: ok=%v err=%v", ref, ok, err)
+		}
+	}
+}
+
+func TestStepShouldRunRefBranchesOnly(t *testing.T) {
+	s := &Step{Name: "main-only", Run: "true", Branches: branchLegacy("main")}
+	ok, err := s.ShouldRunRef("refs/remotes/origin/main")
+	if err != nil || !ok {
+		t.Fatalf("main: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.ShouldRunRef("refs/remotes/origin/dev")
+	if err != nil || ok {
+		t.Fatalf("dev: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.ShouldRunRef("refs/tags/v1.0.0")
+	if err != nil || ok {
+		t.Fatalf("tag: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestStepShouldRunRefTagsOnly(t *testing.T) {
+	s := &Step{Name: "tag-only", Run: "true", Tags: tagLegacy("v*")}
+	ok, err := s.ShouldRunRef("refs/tags/v1.0.0")
+	if err != nil || !ok {
+		t.Fatalf("tag v1: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.ShouldRunRef("refs/remotes/origin/main")
+	if err != nil || ok {
+		t.Fatalf("branch: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestStepShouldRunRefBranchesAndTags(t *testing.T) {
+	s := &Step{
+		Name:     "either",
+		Run:      "true",
+		Branches: branchLegacy("main"),
+		Tags:     tagLegacy("v*"),
+	}
+	ok, err := s.ShouldRunRef("refs/remotes/origin/main")
+	if err != nil || !ok {
+		t.Fatalf("main: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.ShouldRunRef("refs/tags/v2.0.0")
+	if err != nil || !ok {
+		t.Fatalf("tag: ok=%v err=%v", ok, err)
+	}
+	ok, err = s.ShouldRunRef("refs/remotes/origin/dev")
+	if err != nil || ok {
+		t.Fatalf("dev: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestParseStepBranchTagYAML(t *testing.T) {
+	data := []byte(`
+steps:
+  - name: on-main
+    branches: [main]
+    run: "true"
+  - name: on-tags
+    tags:
+      include: ["v*"]
+      exclude: ["v0.*"]
+    run: "true"
+`)
+	f, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Steps) != 2 {
+		t.Fatalf("steps: got %d", len(f.Steps))
+	}
+	ok, err := f.Steps[0].ShouldRunRef("refs/remotes/origin/main")
+	if err != nil || !ok {
+		t.Fatalf("step0 main: ok=%v err=%v", ok, err)
+	}
+	ok, err = f.Steps[1].ShouldRunRef("refs/tags/v1.0.0")
+	if err != nil || !ok {
+		t.Fatalf("step1 v1 tag: ok=%v err=%v", ok, err)
+	}
+	ok, err = f.Steps[1].ShouldRunRef("refs/tags/v0.9.0")
+	if err != nil || ok {
+		t.Fatalf("step1 v0 tag: ok=%v err=%v", ok, err)
+	}
+}

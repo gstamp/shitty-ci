@@ -1,6 +1,10 @@
 package cli
 
-import "shitty-ci/internal/types"
+import (
+	"strings"
+
+	"shitty-ci/internal/types"
+)
 
 type ansi struct {
 	on bool
@@ -32,6 +36,23 @@ func (a ansi) yesNo(ok bool) string {
 		return "\033[32myes\033[0m"
 	}
 	return "\033[31mno\033[0m"
+}
+
+const maxStepLen = 28
+
+func (a ansi) stateWithStep(st types.BuildState, step string) string {
+	stateStr := a.state(st)
+	step = strings.TrimSpace(step)
+	if step == "" {
+		return stateStr
+	}
+	if len(step) > maxStepLen {
+		step = step[:maxStepLen-3] + "..."
+	}
+	if !a.on {
+		return stateStr + " (" + step + ")"
+	}
+	return stateStr + " (\033[36m" + step + "\033[0m)"
 }
 
 func (a ansi) state(st types.BuildState) string {

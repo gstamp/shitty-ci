@@ -144,7 +144,7 @@ func main() {
 		repo := fs.String("repo", "", "filter by owner/repo (overrides cwd default)")
 		all := false
 		fs.BoolVar(&all, "all", false, "list builds from all tracked repos (ignore cwd-based default filter)")
-		limit := fs.Int("limit", 50, "max rows")
+		limit := fs.Int("limit", 25, "max rows")
 		watch := false
 		fs.BoolVar(&watch, "watch", false, "keep polling and redrawing (Ctrl+C to stop)")
 		fs.BoolVar(&watch, "w", false, "alias for --watch")

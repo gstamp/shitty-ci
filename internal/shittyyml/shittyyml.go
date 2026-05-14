@@ -10,8 +10,10 @@ import (
 )
 
 type Step struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Name     string      `yaml:"name"`
+	Run      string      `yaml:"run"`
+	Branches *branchYAML `yaml:"branches,omitempty"`
+	Tags     *tagYAML    `yaml:"tags,omitempty"`
 }
 
 // RefFilter selects remote branch names or tag names (after stripping ref prefixes).
@@ -199,6 +201,38 @@ func (f *File) StepBuildTimeout() (time.Duration, error) {
 		return 0, nil
 	}
 	return time.ParseDuration(f.BuildTimeout)
+}
+
+// ShouldRunRef decides whether this step should execute for the given git ref.
+// Omitting both branches and tags means the step always runs when the build runs.
+// If only branches is set, the step is skipped on tag builds; if only tags is set,
+// the step is skipped on branch builds. When both are set, branch refs are matched
+// against branches and tag refs against tags (so the step can run on selected
+// branches and/or selected tags).
+func (s *Step) ShouldRunRef(ref string) (bool, error) {
+	hasBranches := s.Branches != nil
+	hasTags := s.Tags != nil
+	if !hasBranches && !hasTags {
+		return true, nil
+	}
+	if strings.HasPrefix(ref, "refs/remotes/origin/") {
+		branch := strings.TrimPrefix(ref, "refs/remotes/origin/")
+		if branch == "HEAD" {
+			return false, nil
+		}
+		if hasBranches {
+			return (*RefFilter)(s.Branches).match(branch, true)
+		}
+		return false, nil
+	}
+	if strings.HasPrefix(ref, "refs/tags/") {
+		tag := strings.TrimPrefix(ref, "refs/tags/")
+		if hasTags {
+			return (*RefFilter)(s.Tags).match(tag, false)
+		}
+		return false, nil
+	}
+	return false, nil
 }
 
 // ShouldBuildRef decides whether a ref (full git ref) should trigger builds given file rules.
