@@ -179,6 +179,7 @@ Rough mapping:
 | Failure | `failure` | Step failed / misconfiguration |
 | Timed out | `error` | Includes configured timeout |
 | Cancelled | `error` | Build cancelled by user |
+| Interrupted | `error` | Daemon restarted while build was pending/running |
 
 Context string used on GitHub: `continuous-integration/shitty-ci`.
 

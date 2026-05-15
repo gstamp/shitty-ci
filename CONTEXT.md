@@ -62,7 +62,9 @@ Every 30s by default. Configurable globally in `config.yml`.
 At most 4 builds run simultaneously across all repos. Builds beyond the limit are queued. Configurable globally.
 
 **Build State Machine**:
-`pending` (queued) → `running` → `success` / `failure` / `timed_out` / `cancelled`
+`pending` (queued) → `running` → `success` / `failure` / `timed_out` / `cancelled` / `interrupted`
+
+_On daemon startup, any `pending` or `running` rows without a `finished_at` from a prior run are marked `interrupted` and GitHub is updated when a token is configured._
 
 **Build Timeout**:
 30 minutes by default. Killed with SIGKILL to the process group. Overridable per-repo in `.shitty-ci.yml`.
@@ -77,7 +79,7 @@ _Avoid_: Storing full logs in SQLite
 ## GitHub Integration
 
 **Status Reporting**:
-Build outcomes are reported via the Commit Statuses API (`/repos/{owner}/{repo}/statuses/{sha}`). `success` → green, `failure` → red, `timed_out`/`cancelled` → error (with description). Authenticated with a Personal Access Token.
+Build outcomes are reported via the Commit Statuses API (`/repos/{owner}/{repo}/statuses/{sha}`). `success` → green, `failure` → red, `timed_out`/`cancelled`/`interrupted` → error (with description). Authenticated with a Personal Access Token.
 _Avoid_: GitHub Check Runs API, GitHub App registration
 
 ## Build Model

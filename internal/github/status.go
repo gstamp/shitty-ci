@@ -172,6 +172,8 @@ func MapBuildState(internal string) (gh string, desc string) {
 		return "error", "Build timed out"
 	case "cancelled":
 		return "error", "Build cancelled by user"
+	case "interrupted":
+		return "error", "Build interrupted (daemon restarted)"
 	default:
 		return "error", internal
 	}

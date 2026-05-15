@@ -64,7 +64,7 @@ func (a ansi) state(st types.BuildState) string {
 		return "\033[32m" + string(st) + "\033[0m"
 	case types.BuildFailure:
 		return "\033[31m" + string(st) + "\033[0m"
-	case types.BuildTimedOut, types.BuildCancelled:
+	case types.BuildTimedOut, types.BuildCancelled, types.BuildInterrupted:
 		return "\033[33m" + string(st) + "\033[0m"
 	case types.BuildRunning:
 		return "\033[36m" + string(st) + "\033[0m"

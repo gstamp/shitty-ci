@@ -53,7 +53,7 @@ func PrintBuilds(w io.Writer, builds []types.Build, color, tips bool) {
 		return
 	}
 
-	fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-12s  %-40s  %s\n",
+	fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-14s  %-44s  %s\n",
 		"BUILD", "REPO", "SHA", "REF", "STATE", "CREATED")
 
 	for _, b := range builds {
@@ -62,12 +62,12 @@ func PrintBuilds(w io.Writer, builds []types.Build, color, tips bool) {
 			created = time.Unix(b.CreatedAt, 0).Local().Format("2006-01-02 15:04")
 		}
 		stateCell := a.stateWithStep(b.State, b.Step)
-		fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-12s  %s\n",
+		fmt.Fprintf(w, "%-9s  %-20s  %-8s  %-14s  %s\n",
 			shortBuildID(b.ID),
 			b.Repo,
 			shortSHA(b.SHA),
-			shortRef(b.Ref),
-			padVisible(stateCell, 40)+"  "+created,
+			refCell(b.Ref, 14),
+			padVisible(stateCell, 44)+"  "+created,
 		)
 	}
 
@@ -107,6 +107,15 @@ func padVisible(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-len(visible))
+}
+
+func refCell(ref string, width int) string {
+	s := shortRef(ref)
+	visible := ansiRe.ReplaceAllString(s, "")
+	if len(visible) > width {
+		return visible[:width-3] + "..."
+	}
+	return s
 }
 
 func shortRef(ref string) string {

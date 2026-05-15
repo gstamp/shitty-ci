@@ -283,3 +283,41 @@ func BuildLogPath(ctx context.Context, dbConn *sql.DB, id string) (string, error
 	err := dbConn.QueryRowContext(ctx, `SELECT log_path FROM builds WHERE id=?`, id).Scan(&p)
 	return p, err
 }
+
+// UnfinishedBuild is a build row left in a non-terminal state when the daemon exited unexpectedly.
+type UnfinishedBuild struct {
+	ID    string
+	Owner string
+	Name  string
+	SHA   string
+	Ref   string
+	Step  string
+}
+
+// ListUnfinishedBuilds returns builds still marked pending or running with no finished_at.
+func ListUnfinishedBuilds(ctx context.Context, dbConn *sql.DB) ([]UnfinishedBuild, error) {
+	rows, err := dbConn.QueryContext(ctx, `SELECT b.id, r.owner, r.name, b.sha, b.ref, b.step_name
+		FROM builds b JOIN repos r ON r.id=b.repo_id
+		WHERE b.finished_at=0 AND b.state IN ('pending','running')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UnfinishedBuild
+	for rows.Next() {
+		var u UnfinishedBuild
+		if err := rows.Scan(&u.ID, &u.Owner, &u.Name, &u.SHA, &u.Ref, &u.Step); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// MarkBuildInterrupted marks a single unfinished build as interrupted if it is still pending/running.
+func MarkBuildInterrupted(ctx context.Context, dbConn *sql.DB, id, description string, finishedAt int64) error {
+	_, err := dbConn.ExecContext(ctx, `UPDATE builds SET state=?, description=?, finished_at=?
+		WHERE id=? AND finished_at=0 AND state IN ('pending','running')`,
+		string(types.BuildInterrupted), description, finishedAt, id)
+	return err
+}

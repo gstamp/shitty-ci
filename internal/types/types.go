@@ -3,19 +3,20 @@ package types
 type BuildState string
 
 const (
-	BuildPending   BuildState = "pending"
-	BuildRunning   BuildState = "running"
-	BuildSuccess   BuildState = "success"
-	BuildFailure   BuildState = "failure"
-	BuildTimedOut  BuildState = "timed_out"
-	BuildCancelled BuildState = "cancelled"
+	BuildPending     BuildState = "pending"
+	BuildRunning     BuildState = "running"
+	BuildSuccess     BuildState = "success"
+	BuildFailure     BuildState = "failure"
+	BuildTimedOut    BuildState = "timed_out"
+	BuildCancelled   BuildState = "cancelled"
+	BuildInterrupted BuildState = "interrupted"
 )
 
 type Repo struct {
-	ID     int64  `json:"id"`
-	Owner  string `json:"owner"`
-	Name   string `json:"name"`
-	Full   string `json:"full"`
+	ID    int64  `json:"id"`
+	Owner string `json:"owner"`
+	Name  string `json:"name"`
+	Full  string `json:"full"`
 }
 
 type Build struct {
@@ -32,10 +33,10 @@ type Build struct {
 }
 
 type DaemonStatus struct {
-	OK             bool   `json:"ok"`
-	QueueDepth     int    `json:"queue_depth"`
-	RunningBuilds  int    `json:"running_builds"`
-	MaxConcurrent  int    `json:"max_concurrent"`
-	PollInterval   string `json:"poll_interval"`
-	DataDir        string `json:"data_dir"`
+	OK            bool   `json:"ok"`
+	QueueDepth    int    `json:"queue_depth"`
+	RunningBuilds int    `json:"running_builds"`
+	MaxConcurrent int    `json:"max_concurrent"`
+	PollInterval  string `json:"poll_interval"`
+	DataDir       string `json:"data_dir"`
 }

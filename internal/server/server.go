@@ -109,6 +109,8 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	_ = a.store.Refresh()
 
+	a.recoverStaleBuilds(ctx)
+
 	go a.configReloader(ctx)
 	go a.scheduler(ctx)
 	go a.pruner(ctx)
