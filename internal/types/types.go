@@ -30,6 +30,7 @@ type Build struct {
 	StartedAt   int64      `json:"started_at,omitempty"`
 	FinishedAt  int64      `json:"finished_at,omitempty"`
 	Description string     `json:"description,omitempty"`
+	RepoID      int64      `json:"-"`
 }
 
 type DaemonStatus struct {

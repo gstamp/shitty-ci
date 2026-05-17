@@ -33,6 +33,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  shitty-ci builds [--repo owner/repo] [--all] [--limit N]")
 	fmt.Fprintln(os.Stderr, "  shitty-ci logs [--tail N] [--follow|-f] [<build id prefix | commit sha>]")
 	fmt.Fprintln(os.Stderr, "  shitty-ci cancel <build id prefix | commit sha>")
+	fmt.Fprintln(os.Stderr, "  shitty-ci retry <build id prefix | commit sha>")
 	fmt.Fprintln(os.Stderr, "  shitty-ci status")
 	fmt.Fprintln(os.Stderr, "  shitty-ci config")
 	os.Exit(2)
@@ -333,6 +334,18 @@ func main() {
 					fmt.Print(next)
 				}
 			}
+		}
+	case "retry":
+		if len(os.Args) != 3 {
+			fatal(fmt.Errorf("usage: shitty-ci retry <build id prefix | commit sha>"))
+		}
+		resp, err := cli.RPC(proto.Request{Cmd: "retry", BuildID: os.Args[2]})
+		mustRPC(resp, err)
+		data, _ := resp.Data.(map[string]any)
+		if id, ok := data["build_id"].(string); ok {
+			fmt.Printf("ok (new build id: %s)\n", id)
+		} else {
+			fmt.Println("ok")
 		}
 	case "cancel":
 		if len(os.Args) != 3 {

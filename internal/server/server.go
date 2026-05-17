@@ -22,6 +22,7 @@ import (
 	"shitty-ci/internal/proto"
 	"shitty-ci/internal/shittyyml"
 	"shitty-ci/internal/types"
+	"shitty-ci/internal/xdg"
 )
 
 // daemonLog writes to stderr; the standard logger serializes concurrent writes.
@@ -508,6 +509,56 @@ func (a *App) dispatch(ctx context.Context, req proto.Request) proto.Response {
 			return proto.Err(err.Error())
 		}
 		return proto.OK(proto.SecretKeysData{Keys: keys})
+	case "retry":
+		if req.BuildID == "" {
+			return proto.Err("missing build_id")
+		}
+		id, err := db.ResolveLogsTarget(ctx, a.db, req.BuildID)
+		if err != nil {
+			return proto.Err(err.Error())
+		}
+		b, err := db.GetBuild(ctx, a.db, id)
+		if err != nil {
+			return proto.Err("unknown build")
+		}
+		if b.State == types.BuildRunning || b.State == types.BuildPending {
+			return proto.Err("build is still running or pending — cancel it first")
+		}
+
+		active, err := db.HasActiveBuildForCommit(ctx, a.db, b.RepoID, b.SHA, b.Ref)
+		if err != nil {
+			return proto.Err(err.Error())
+		}
+		if active {
+			return proto.Err("a build for this commit is already pending or running (the poller may have already queued it)")
+		}
+
+		owner, name, ok := splitOwnerRepo(b.Repo)
+		if !ok {
+			return proto.Err("invalid repo in build record")
+		}
+		newBuildID, err := newBuildID()
+		if err != nil {
+			return proto.Err(err.Error())
+		}
+		logPath := filepath.Join(xdg.LogsDir(a.dataDir), newBuildID+".log")
+		_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
+
+		if err := db.CreateBuild(ctx, a.db, newBuildID, b.RepoID, b.SHA, b.Ref, types.BuildPending, logPath); err != nil {
+			return proto.Err(err.Error())
+		}
+
+		daemonLog.Printf("retry %s/%s ref=%s sha=%s — queued as build %s", owner, name, b.Ref, shortSHA(b.SHA), shortBuildID(newBuildID))
+
+		a.queue <- BuildJob{
+			RepoID: b.RepoID,
+			Owner:  owner,
+			Name:   name,
+			SHA:    b.SHA,
+			Ref:    b.Ref,
+		}
+
+		return proto.OK(map[string]any{"build_id": newBuildID})
 	case "config_show":
 		cfg := a.store.Get()
 		return proto.OK(proto.ConfigView{

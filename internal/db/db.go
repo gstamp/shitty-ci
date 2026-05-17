@@ -211,9 +211,9 @@ func UpdateBuildState(ctx context.Context, dbConn *sql.DB, id string, state type
 func GetBuild(ctx context.Context, dbConn *sql.DB, id string) (types.Build, error) {
 	var b types.Build
 	var repoOwner, repoName string
-	err := dbConn.QueryRowContext(ctx, `SELECT b.id, r.owner, r.name, b.sha, b.ref, b.state, b.step_name, b.description, b.created_at, b.started_at, b.finished_at
+	err := dbConn.QueryRowContext(ctx, `SELECT b.id, r.owner, r.name, b.sha, b.ref, b.state, b.step_name, b.description, b.created_at, b.started_at, b.finished_at, b.repo_id
 		FROM builds b JOIN repos r ON r.id=b.repo_id WHERE b.id=?`, id).
-		Scan(&b.ID, &repoOwner, &repoName, &b.SHA, &b.Ref, &b.State, &b.Step, &b.Description, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
+		Scan(&b.ID, &repoOwner, &repoName, &b.SHA, &b.Ref, &b.State, &b.Step, &b.Description, &b.CreatedAt, &b.StartedAt, &b.FinishedAt, &b.RepoID)
 	if err != nil {
 		return b, err
 	}
@@ -312,6 +312,16 @@ func ListUnfinishedBuilds(ctx context.Context, dbConn *sql.DB) ([]UnfinishedBuil
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// HasActiveBuildForCommit returns true if there is a pending or running build for the given repo+SHA+ref.
+func HasActiveBuildForCommit(ctx context.Context, dbConn *sql.DB, repoID int64, sha, ref string) (bool, error) {
+	var count int
+	err := dbConn.QueryRowContext(ctx, `SELECT COUNT(*) FROM builds WHERE repo_id=? AND sha=? AND ref=? AND state IN ('pending','running')`, repoID, sha, ref).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // MarkBuildInterrupted marks a single unfinished build as interrupted if it is still pending/running.
