@@ -22,19 +22,20 @@ import (
 	"shitty-ci/internal/proto"
 	"shitty-ci/internal/shittyyml"
 	"shitty-ci/internal/types"
-	"shitty-ci/internal/xdg"
 )
 
 // daemonLog writes to stderr; the standard logger serializes concurrent writes.
 var daemonLog = log.New(os.Stderr, "shitty-ci: ", log.LstdFlags)
 
 // BuildJob is queued work for one commit on a ref.
+// BuildID, when set, is the DB/log id for this job (retry); otherwise runBuild allocates one.
 type BuildJob struct {
-	RepoID int64
-	Owner  string
-	Name   string
-	SHA    string
-	Ref    string
+	RepoID  int64
+	Owner   string
+	Name    string
+	SHA     string
+	Ref     string
+	BuildID string
 }
 
 type App struct {
@@ -541,21 +542,15 @@ func (a *App) dispatch(ctx context.Context, req proto.Request) proto.Response {
 		if err != nil {
 			return proto.Err(err.Error())
 		}
-		logPath := filepath.Join(xdg.LogsDir(a.dataDir), newBuildID+".log")
-		_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-
-		if err := db.CreateBuild(ctx, a.db, newBuildID, b.RepoID, b.SHA, b.Ref, types.BuildPending, logPath); err != nil {
-			return proto.Err(err.Error())
-		}
-
 		daemonLog.Printf("retry %s/%s ref=%s sha=%s — queued as build %s", owner, name, b.Ref, shortSHA(b.SHA), shortBuildID(newBuildID))
 
 		a.queue <- BuildJob{
-			RepoID: b.RepoID,
-			Owner:  owner,
-			Name:   name,
-			SHA:    b.SHA,
-			Ref:    b.Ref,
+			RepoID:  b.RepoID,
+			Owner:   owner,
+			Name:    name,
+			SHA:     b.SHA,
+			Ref:     b.Ref,
+			BuildID: newBuildID,
 		}
 
 		return proto.OK(map[string]any{"build_id": newBuildID})

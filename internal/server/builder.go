@@ -68,10 +68,14 @@ func logBuildDone(buildID string, job BuildJob, state types.BuildState, detail s
 
 func (a *App) runBuild(parent context.Context, job BuildJob) {
 	ctx := parent
-	buildID, err := newBuildID()
-	if err != nil {
-		daemonLog.Printf("could not allocate build id: %v", err)
-		return
+	buildID := job.BuildID
+	if buildID == "" {
+		var err error
+		buildID, err = newBuildID()
+		if err != nil {
+			daemonLog.Printf("could not allocate build id: %v", err)
+			return
+		}
 	}
 	logPath := filepath.Join(xdg.LogsDir(a.dataDir), buildID+".log")
 	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
