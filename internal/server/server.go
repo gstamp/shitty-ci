@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ type App struct {
 	store      *config.Store
 	dataDir    string
 	socketPath string
+	authToken  string
 
 	queue chan BuildJob
 
@@ -58,12 +60,13 @@ type activeBuild struct {
 	pid        *atomic.Int32
 }
 
-func NewApp(dbConn *sql.DB, store *config.Store, dataDir, socketPath string) *App {
+func NewApp(dbConn *sql.DB, store *config.Store, dataDir, socketPath, authToken string) *App {
 	return &App{
 		db:         dbConn,
 		store:      store,
 		dataDir:    dataDir,
 		socketPath: socketPath,
+		authToken:  authToken,
 		queue:      make(chan BuildJob, 256),
 		active:     make(map[string]*activeBuild),
 	}
@@ -133,6 +136,32 @@ func (a *App) Run(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
+	cfg := a.store.Get()
+	if addr := cfg.Listen; addr != "" {
+		tcpLn, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("tcp listen on %s: %w", addr, err)
+		}
+		daemonLog.Printf("listening on tcp %s", addr)
+		go func() {
+			<-ctx.Done()
+			_ = tcpLn.Close()
+		}()
+		go func() {
+			for {
+				conn, err := tcpLn.Accept()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					daemonLog.Printf("tcp accept error: %v", err)
+					return
+				}
+				go a.handleConn(conn, true)
+			}
+		}()
+	}
+
 	a.printStartupSummary(ctx)
 
 	go a.poller(ctx)
@@ -145,7 +174,7 @@ func (a *App) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		go a.handleConn(conn)
+		go a.handleConn(conn, false)
 	}
 }
 
@@ -345,13 +374,19 @@ func refTipSHA(ws, ref string) (string, error) {
 	return gitutil.RunGit(ws, "rev-parse", ref)
 }
 
-func (a *App) handleConn(c net.Conn) {
+func (a *App) handleConn(c net.Conn, requireAuth bool) {
 	defer c.Close()
 	dec := json.NewDecoder(c)
 	var req proto.Request
 	if err := dec.Decode(&req); err != nil {
 		_ = json.NewEncoder(c).Encode(proto.Err("invalid request"))
 		return
+	}
+	if requireAuth && a.authToken != "" {
+		if subtle.ConstantTimeCompare([]byte(req.Token), []byte(a.authToken)) != 1 {
+			_ = json.NewEncoder(c).Encode(proto.Err("unauthorized"))
+			return
+		}
 	}
 	resp := a.dispatch(context.Background(), req)
 	_ = json.NewEncoder(c).Encode(resp)
@@ -564,6 +599,7 @@ func (a *App) dispatch(ctx context.Context, req proto.Request) proto.Response {
 			HasGitHubToken:  cfg.GitHubToken != "",
 			DataDirOverride: cfg.DataDir,
 			WorkspaceTTL:    cfg.WorkspaceTTL.String(),
+			Listen:          cfg.Listen,
 			ResolvedDataDir: a.dataDir,
 		})
 	default:
@@ -600,7 +636,11 @@ func ellipsize(s string, max int) string {
 }
 
 func (a *App) printStartupSummary(ctx context.Context) {
-	daemonLog.Printf("listening on unix socket %s", a.socketPath)
+	msg := fmt.Sprintf("listening on unix socket %s", a.socketPath)
+	if addr := a.store.Get().Listen; addr != "" {
+		msg += fmt.Sprintf(" and tcp %s", addr)
+	}
+	daemonLog.Print(msg)
 
 	repos, err := db.ListRepos(ctx, a.db)
 	if err != nil {

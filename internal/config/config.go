@@ -19,6 +19,7 @@ type Config struct {
 	GitHubToken         string        `yaml:"github_token"`
 	DataDir             string        `yaml:"data_dir"`
 	WorkspaceTTL        time.Duration `yaml:"workspace_ttl"`
+	Listen              string        `yaml:"listen"`
 }
 
 func Default() Config {
@@ -46,6 +47,7 @@ func Load(path string) (Config, error) {
 		GitHubToken         string `yaml:"github_token"`
 		DataDir             string `yaml:"data_dir"`
 		WorkspaceTTL        string `yaml:"workspace_ttl"`
+		Listen              string `yaml:"listen"`
 	}
 	if err := yaml.Unmarshal(b, &aux); err != nil {
 		return Config{}, err
@@ -79,6 +81,9 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 		c.WorkspaceTTL = d
+	}
+	if aux.Listen != "" {
+		c.Listen = aux.Listen
 	}
 	return c, nil
 }
@@ -157,6 +162,7 @@ github_token: ""
 # Optional:
 # data_dir: /custom/path
 # workspace_ttl: 24h
+# listen: "127.0.0.1:9876"   # TCP address for remote CLI access
 `)
 	return os.WriteFile(path, ex, 0o644)
 }

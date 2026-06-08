@@ -58,3 +58,7 @@ func LogsDir(dataDir string) string {
 func WorkspacesRoot(dataDir string) string {
 	return filepath.Join(dataDir, "workspaces")
 }
+
+func AuthTokenPath(dataDir string) string {
+	return filepath.Join(dataDir, "auth_token")
+}

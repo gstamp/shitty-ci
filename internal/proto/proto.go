@@ -4,6 +4,7 @@ import "shitty-ci/internal/types"
 
 type Request struct {
 	Cmd     string `json:"cmd"`
+	Token   string `json:"token,omitempty"`
 	Repo    string `json:"repo,omitempty"`
 	Limit   int    `json:"limit,omitempty"`
 	BuildID string `json:"build_id,omitempty"`
@@ -26,6 +27,7 @@ type ConfigView struct {
 	HasGitHubToken  bool   `json:"has_github_token"`
 	DataDirOverride string `json:"data_dir_override,omitempty"`
 	WorkspaceTTL    string `json:"workspace_ttl"`
+	Listen          string `json:"listen,omitempty"`
 	ResolvedDataDir string `json:"resolved_data_dir"`
 }
 

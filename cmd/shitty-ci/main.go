@@ -22,7 +22,11 @@ import (
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: shitty-ci <command> [args]")
+	fmt.Fprintln(os.Stderr, "usage: shitty-ci [global flags] <command> [args]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "global flags:")
+	fmt.Fprintln(os.Stderr, "  --server host:port   remote daemon address (env: SHITTY_CI_SERVER)")
+	fmt.Fprintln(os.Stderr, "  --token str          auth token (env: SHITTY_CI_TOKEN)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "commands:")
 	fmt.Fprintln(os.Stderr, "  shitty-ci server [--install-systemd]")
@@ -34,12 +38,44 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  shitty-ci logs [--tail N] [--follow|-f] [<build id prefix | commit sha>]")
 	fmt.Fprintln(os.Stderr, "  shitty-ci cancel <build id prefix | commit sha>")
 	fmt.Fprintln(os.Stderr, "  shitty-ci retry <build id prefix | commit sha>")
+	fmt.Fprintln(os.Stderr, "  shitty-ci token")
 	fmt.Fprintln(os.Stderr, "  shitty-ci status")
 	fmt.Fprintln(os.Stderr, "  shitty-ci config")
 	os.Exit(2)
 }
 
 func main() {
+	cli.ServerAddr = os.Getenv("SHITTY_CI_SERVER")
+	cli.AuthToken = os.Getenv("SHITTY_CI_TOKEN")
+
+	filtered := []string{os.Args[0]}
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--server":
+			i++
+			if i < len(os.Args) {
+				cli.ServerAddr = os.Args[i]
+			}
+		case "--token":
+			i++
+			if i < len(os.Args) {
+				cli.AuthToken = os.Args[i]
+			}
+		default:
+			filtered = append(filtered, os.Args[i])
+		}
+	}
+	if cli.AuthToken == "" && cli.ServerAddr != "" {
+		cfg, err := config.Load(config.DefaultConfigPath())
+		if err == nil {
+			dataDir := xdg.DataDir(cfg.DataDir)
+			if tok, err := config.ReadToken(xdg.AuthTokenPath(dataDir)); err == nil {
+				cli.AuthToken = tok
+			}
+		}
+	}
+	os.Args = filtered
+
 	if len(os.Args) < 2 {
 		usage()
 	}
@@ -347,6 +383,20 @@ func main() {
 		} else {
 			fmt.Println("ok")
 		}
+	case "token":
+		if cli.ServerAddr != "" {
+			fatal(fmt.Errorf("token subcommand only works locally"))
+		}
+		cfg, err := config.Load(config.DefaultConfigPath())
+		if err != nil {
+			fatal(err)
+		}
+		dataDir := xdg.DataDir(cfg.DataDir)
+		tok, err := config.ReadToken(xdg.AuthTokenPath(dataDir))
+		if err != nil {
+			fatal(fmt.Errorf("no auth token found; configure remote listening first"))
+		}
+		fmt.Println(tok)
 	case "cancel":
 		if len(os.Args) != 3 {
 			fatal(fmt.Errorf("usage: shitty-ci cancel <build id prefix | commit sha>"))
@@ -377,6 +427,9 @@ func main() {
 		fmt.Printf("build_timeout=%v\n", data["build_timeout"])
 		fmt.Printf("workspace_ttl=%v\n", data["workspace_ttl"])
 		fmt.Printf("github_token_set=%v\n", data["has_github_token"])
+		if v, ok := data["listen"].(string); ok && v != "" {
+			fmt.Printf("listen=%v\n", v)
+		}
 	default:
 		usage()
 	}
@@ -398,7 +451,16 @@ func runServer() {
 	}
 	defer sqlDB.Close()
 
-	app := server.NewApp(sqlDB, store, dataDir, xdg.SocketPath(dataDir))
+	cfg := store.Get()
+	var authToken string
+	if cfg.Listen != "" {
+		var err error
+		authToken, err = config.LoadOrGenerateToken(xdg.AuthTokenPath(dataDir))
+		if err != nil {
+			fatal(err)
+		}
+	}
+	app := server.NewApp(sqlDB, store, dataDir, xdg.SocketPath(dataDir), authToken)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

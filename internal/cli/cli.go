@@ -14,6 +14,11 @@ import (
 	"shitty-ci/internal/xdg"
 )
 
+var (
+	ServerAddr string
+	AuthToken  string
+)
+
 func dial() (*net.UnixConn, error) {
 	cfg, err := config.Load(config.DefaultConfigPath())
 	if err != nil {
@@ -42,7 +47,6 @@ func friendlyDialErr(err error) error {
 			return fmt.Errorf("can't connect to shitty-ci daemon — run `shitty-ci server` first")
 		}
 	}
-	// Dial can surface syscall errors directly (e.g. missing socket path).
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) {
 		return fmt.Errorf("can't connect to shitty-ci daemon — run `shitty-ci server` first")
 	}
@@ -50,6 +54,13 @@ func friendlyDialErr(err error) error {
 }
 
 func RPC(req proto.Request) (proto.Response, error) {
+	if ServerAddr != "" {
+		return rpcRemote(req)
+	}
+	return rpcLocal(req)
+}
+
+func rpcLocal(req proto.Request) (proto.Response, error) {
 	c, err := dial()
 	if err != nil {
 		return proto.Response{}, friendlyDialErr(err)
@@ -60,6 +71,29 @@ func RPC(req proto.Request) (proto.Response, error) {
 	}
 	if err := c.CloseWrite(); err != nil {
 		return proto.Response{}, err
+	}
+	var resp proto.Response
+	if err := json.NewDecoder(c).Decode(&resp); err != nil {
+		return proto.Response{}, err
+	}
+	return resp, nil
+}
+
+func rpcRemote(req proto.Request) (proto.Response, error) {
+	req.Token = AuthToken
+	c, err := net.Dial("tcp", ServerAddr)
+	if err != nil {
+		return proto.Response{}, friendlyDialErr(err)
+	}
+	defer c.Close()
+	if err := json.NewEncoder(c).Encode(req); err != nil {
+		return proto.Response{}, err
+	}
+	type closeWriter interface {
+		CloseWrite() error
+	}
+	if cw, ok := c.(closeWriter); ok {
+		_ = cw.CloseWrite()
 	}
 	var resp proto.Response
 	if err := json.NewDecoder(c).Decode(&resp); err != nil {

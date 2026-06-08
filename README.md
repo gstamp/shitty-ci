@@ -8,7 +8,7 @@ This is made mainly just for me to resolve exactly the problem I wanted solved. 
 
 ## What you get
 
-- **Daemon + CLI** over a Unix socket (`server.sock` under your data directory).
+- **Daemon + CLI** over a Unix socket (local) or TCP (remote machines).
 - **SQLite** state (tracked repos, refs, builds, workspace pool).
 - **YAML config** with hot reload when the file changes.
 - **Per-repo** `.shitty-ci.yml` in the repo (read from the commit being built).
@@ -74,9 +74,10 @@ github_token: "" # set to a PAT to enable status posting
 # Optional:
 # data_dir: /custom/parent   # resolved to .../shitty-ci (see below)
 # workspace_ttl: 24h        # idle workspace directories pruned after this
+# listen: "127.0.0.1:9876"  # TCP address for remote CLI access
 ```
 
-**Hot reload:** while the daemon is running, edit and save `config.yml`. The daemon notices **mtime** changes within a couple of seconds and picks up `poll_interval`, `max_concurrent_builds`, `build_timeout`, `github_token`, `data_dir`, and `workspace_ttl` without a restart.
+**Hot reload:** while the daemon is running, edit and save `config.yml`. The daemon notices **mtime** changes within a couple of seconds and picks up `poll_interval`, `max_concurrent_builds`, `build_timeout`, `github_token`, `data_dir`, and `workspace_ttl` without a restart. The `listen` field requires a daemon restart.
 
 **Data directory:** by default everything lives under:
 
@@ -85,7 +86,7 @@ github_token: "" # set to a PAT to enable status posting
 
 That folder holds `shitty-ci.db`, `server.sock`, `logs/`, and `workspaces/`. If you set `data_dir` in config, the daemon uses `<data_dir>/shitty-ci` as the root (same layout inside).
 
-**CLI ↔ daemon (local only):** every subcommand except `shitty-ci server` dials `server.sock` on the **same machine** using the same resolved data directory as above. There is **no** configurable remote host, URL, or TCP listener for the control plane; run the CLI where the daemon runs (or use something like SSH to a shell on that host). GitHub status posting is separate: that goes to GitHub’s HTTP API when `github_token` is set. A **possible future** extension is the same JSON control protocol over TCP or TLS with explicit authentication, but that is not implemented today.
+**CLI ↔ daemon (remote access):** by default every subcommand dials the local Unix socket (`server.sock`). To manage a daemon on another machine, pass `--server host:port` and `--token <token>` (or set `SHITTY_CI_SERVER` / `SHITTY_CI_TOKEN` env vars). The daemon must have `listen` configured in its `config.yml` to accept TCP connections. See [Remote access](#remote-access) below.
 
 ## CLI reference
 
@@ -101,6 +102,7 @@ That folder holds `shitty-ci.db`, `server.sock`, `logs/`, and `workspaces/`. If 
 | `shitty-ci cancel <build-id>` | **SIGKILL** the running build’s process group |
 | `shitty-ci status` | Queue depth, running builds, limits, poll interval, data dir |
 | `shitty-ci config` | Show effective settings (token presence is boolean only) |
+| `shitty-ci token` | Print the auth token (local only; for remote CLI setup) |
 
 If the CLI cannot connect to the socket, it prints a short hint to run `shitty-ci server` first instead of a raw errno string.
 
@@ -185,7 +187,45 @@ Context string used on GitHub: `continuous-integration/shitty-ci`.
 
 Failure descriptions are **short** (GitHub caps them at **140 characters**), but they now include a **one-line error snippet** when available, plus a **`shitty-ci logs <build-id>`** hint so you can pull the full stdout/stderr from the daemon host. The complete trace is always in `<data-dir>/logs/<build-id>.log`.
 
+## Remote access
+
+The daemon can accept CLI connections over TCP in addition to the local Unix socket.
+
+1. **Configure** `listen` in `config.yml` (requires daemon restart):
+
+   ```yaml
+   listen: "127.0.0.1:9876"   # listen only on loopback
+   listen: "0.0.0.0:9876"      # listen on all interfaces
+   ```
+
+2. **Start (or restart) the daemon.** On first start with `listen` set, the daemon generates a 64-hex-char auth token and writes it to `<data-dir>/auth_token`.
+
+3. **Retrieve the token** (on the daemon machine):
+
+   ```bash
+   shitty-ci token
+   ```
+
+4. **Use the CLI remotely:**
+
+   ```bash
+   shitty-ci --server daemon.local:9876 --token a1b2...c3d4 status
+   ```
+
+   Or via environment variables:
+
+   ```bash
+   export SHITTY_CI_SERVER=daemon.local:9876
+   export SHITTY_CI_TOKEN=a1b2...c3d4
+   shitty-ci status
+   ```
+
+**Auth:** Token is validated on TCP connections using constant-time comparison. Unix socket connections skip token validation (preserving local trust).
+
+**TLS:** Not yet supported. TCP connections are unencrypted — use a VPN, WireGuard, SSH tunnel, or bind to loopback (default suggestion) for non-LAN paths.
+
 ## Security notes
 
 - Treat `config.yml` as a **secret** if it contains a PAT.
+- Treat `<data-dir>/auth_token` as a **secret** — it authorizes full access to the daemon over TCP.
 - The daemon runs **shell commands from your repo’s YAML** on the host. Only track repositories you trust, same as any self-hosted runner.
