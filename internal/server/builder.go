@@ -291,6 +291,9 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("step %q failed: %v", step.Name, waitErr), buildClock)
 			return
 		}
+
+		// Step succeeded — mark its check run as completed.
+		a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "completed", "success", nil, "", i)
 	}
 
 	now := time.Now().Unix()
