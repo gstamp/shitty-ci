@@ -40,8 +40,6 @@ func (a *App) recoverStaleBuilds(ctx context.Context) {
 			continue
 		}
 		_, ghDesc := gh.MapBuildState(string(types.BuildInterrupted))
-		if err := gh.PostStatus(token, b.Owner, b.Name, b.SHA, "error", gh.StatusDescriptionWithLogsHint(ghDesc, b.ID), gh.CommitStatusTargetURL(b.Owner, b.Name, b.SHA)); err != nil {
-			daemonLog.Printf("recovery: github status post failed for %s/%s@%s: %v", b.Owner, b.Name, shortSHA(b.SHA), err)
-		}
+		a.postStatus(b.Owner, b.Name, b.SHA, "error", gh.StatusDescriptionWithLogsHint(ghDesc, b.ID))
 	}
 }

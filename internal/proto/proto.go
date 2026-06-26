@@ -25,6 +25,7 @@ type ConfigView struct {
 	MaxConcurrent   int    `json:"max_concurrent_builds"`
 	BuildTimeout    string `json:"build_timeout"`
 	HasGitHubToken  bool   `json:"has_github_token"`
+	HasGitHubApp    bool   `json:"has_github_app"`
 	DataDirOverride string `json:"data_dir_override,omitempty"`
 	WorkspaceTTL    string `json:"workspace_ttl"`
 	Listen          string `json:"listen,omitempty"`

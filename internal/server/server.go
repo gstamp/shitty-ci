@@ -600,6 +600,7 @@ func (a *App) dispatch(ctx context.Context, req proto.Request) proto.Response {
 			MaxConcurrent:   cfg.MaxConcurrentBuilds,
 			BuildTimeout:    cfg.BuildTimeout.String(),
 			HasGitHubToken:  cfg.GitHubToken != "",
+			HasGitHubApp:    cfg.GitHubApp.AppID > 0 || cfg.GitHubApp.InstallationID > 0 || cfg.GitHubApp.PrivateKeyPath != "",
 			DataDirOverride: cfg.DataDir,
 			WorkspaceTTL:    cfg.WorkspaceTTL.String(),
 			Listen:          cfg.Listen,

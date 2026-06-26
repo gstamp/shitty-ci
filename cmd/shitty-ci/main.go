@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
@@ -14,11 +19,14 @@ import (
 	"shitty-ci/internal/cli"
 	"shitty-ci/internal/config"
 	"shitty-ci/internal/db"
+	gh "shitty-ci/internal/github"
 	"shitty-ci/internal/gitutil"
 	"shitty-ci/internal/proto"
 	"shitty-ci/internal/server"
 	"shitty-ci/internal/types"
 	"shitty-ci/internal/xdg"
+
+	"gopkg.in/yaml.v3"
 )
 
 func usage() {
@@ -41,6 +49,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  shitty-ci token")
 	fmt.Fprintln(os.Stderr, "  shitty-ci status")
 	fmt.Fprintln(os.Stderr, "  shitty-ci config")
+	fmt.Fprintln(os.Stderr, "  shitty-ci github-app setup")
 	os.Exit(2)
 }
 
@@ -427,12 +436,265 @@ func main() {
 		fmt.Printf("build_timeout=%v\n", data["build_timeout"])
 		fmt.Printf("workspace_ttl=%v\n", data["workspace_ttl"])
 		fmt.Printf("github_token_set=%v\n", data["has_github_token"])
+		fmt.Printf("github_app_set=%v\n", data["has_github_app"])
 		if v, ok := data["listen"].(string); ok && v != "" {
 			fmt.Printf("listen=%v\n", v)
+		}
+	case "github-app":
+		if len(os.Args) < 3 {
+			fatal(fmt.Errorf("usage: shitty-ci github-app <setup>"))
+		}
+		switch os.Args[2] {
+		case "setup":
+			if err := runGitHubAppSetup(); err != nil {
+				fatal(err)
+			}
+		default:
+			fatal(fmt.Errorf("unknown github-app subcommand %q (try setup)", os.Args[2]))
 		}
 	default:
 		usage()
 	}
+}
+
+func runGitHubAppSetup() error {
+	const margin = "  "
+
+	fmt.Println()
+	fmt.Println("GitHub App setup")
+	fmt.Println("━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	// ── Generate a unique app name ──
+	var suffix [3]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Errorf("generate name suffix: %w", err)
+	}
+	appName := "shitty-ci-" + hex.EncodeToString(suffix[:])
+
+	manifest := gh.NewManifest()
+	manifest.Name = appName
+
+	// Use URL parameters instead of the base64 manifest blob — they survive
+	// login redirects, which the manifest parameter does not (known GitHub bug).
+	registerURL := manifest.URLParamsURL()
+
+	// ── Step 1: print registration URL ──
+	fmt.Println("Step 1 — Create the GitHub App")
+	fmt.Println("────────────────────────────────")
+	fmt.Println()
+	fmt.Println("Open this URL in your browser:")
+	fmt.Println()
+	fmt.Println(margin + registerURL)
+	fmt.Println()
+	fmt.Println("The fields will be pre-filled. Just scroll down and click")
+	fmt.Println("\"Create GitHub App\" at the bottom.")
+	fmt.Println()
+	fmt.Println("After creating the app, you'll land on the app settings page.")
+	fmt.Println("You need two things from there:")
+	fmt.Println()
+	fmt.Println("  1. The App ID (shown at the top of the page)")
+	fmt.Println("  2. A private key (scroll to \"Private keys\" → Generate one)")
+	fmt.Println()
+
+	var appID int64
+	var pemBytes []byte
+	var slug string
+
+	for {
+		fmt.Print("App ID: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			return fmt.Errorf("no app id provided")
+		}
+		if _, err := fmt.Sscanf(input, "%d", &appID); err != nil || appID <= 0 {
+			fmt.Println("  Invalid App ID — should be a number like 123456")
+			continue
+		}
+		break
+	}
+
+	for {
+		fmt.Print("Path to private key (.pem): ")
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		keyPath := strings.TrimSpace(scanner.Text())
+		if keyPath == "" {
+			return fmt.Errorf("no key path provided")
+		}
+		var err error
+		pemBytes, err = os.ReadFile(keyPath)
+		if err != nil {
+			fmt.Printf("  Could not read %s: %v\n", keyPath, err)
+			continue
+		}
+		if err := verifyPEM(pemBytes); err != nil {
+			fmt.Printf("  Invalid PEM file: %v\n", err)
+			continue
+		}
+
+		// Verify the PEM + App ID combo by calling GET /app
+		fmt.Print("  Verifying… ")
+		appInfo, err := gh.GetApp(appID, pemBytes)
+		if err != nil {
+			fmt.Printf("authentication failed: %v\n", err)
+			fmt.Println("  Make sure the App ID and private key match.")
+			continue
+		}
+		slug = appInfo.Slug
+		fmt.Printf("✓ app \"%s\" by %s\n", slug, appInfo.Owner.Login)
+
+		// Save PEM to config dir
+		savedKeyPath := configPath("github-app.pem")
+		if keyPath != savedKeyPath {
+			if err := os.WriteFile(savedKeyPath, pemBytes, 0o600); err != nil {
+				return fmt.Errorf("save private key: %w", err)
+			}
+		}
+		break
+	}
+
+	fmt.Println()
+
+	// ── Step 2: install the app ──
+	installURL := fmt.Sprintf("https://github.com/apps/%s/installations/new", slug)
+	fmt.Println("Step 2 — Install the app")
+	fmt.Println("─────────────────────────")
+	fmt.Println()
+	fmt.Println("Open this URL in your browser:")
+	fmt.Println()
+	fmt.Println(margin + installURL)
+	fmt.Println()
+	fmt.Println("Click \"Install\" on your user or organization.")
+	fmt.Println()
+	fmt.Print("Press Enter after installing > ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	fmt.Println()
+
+	// ── Detect installation ──
+	fmt.Print("Detecting installation… ")
+	var installations []gh.Installation
+	var err error
+	for attempt := 0; attempt < 15; attempt++ {
+		installations, err = gh.ListInstallations(appID, pemBytes)
+		if err == nil && len(installations) > 0 {
+			break
+		}
+		if attempt < 14 {
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("list installations: %w", err)
+	}
+	if len(installations) == 0 {
+		return fmt.Errorf("no installations found — make sure you installed the app on your account or org")
+	}
+
+	var inst gh.Installation
+	if len(installations) == 1 {
+		inst = installations[0]
+	} else {
+		fmt.Println()
+		fmt.Println("Multiple installations found. Which one should I use?")
+		for i, inst := range installations {
+			fmt.Printf("  %d) %s (%s)\n", i+1, inst.Account.Login, inst.Account.Type)
+		}
+		fmt.Print("Number (1): ")
+		choice := readLine()
+		idx := 0
+		if choice != "" {
+			if _, err := fmt.Sscanf(choice, "%d", &idx); err == nil {
+				idx--
+			}
+		}
+		if idx < 0 || idx >= len(installations) {
+			idx = 0
+		}
+		inst = installations[idx]
+	}
+	fmt.Printf("done! (installation ID: %d, account: %s)\n\n", inst.ID, inst.Account.Login)
+
+	// ── Write config ──
+	cfgPath := config.DefaultConfigPath()
+	fmt.Print("Updating config… ")
+
+	var cfgMap map[string]any
+	if b, err := os.ReadFile(cfgPath); err == nil && len(b) > 0 {
+		_ = yaml.Unmarshal(b, &cfgMap)
+	}
+	if cfgMap == nil {
+		cfgMap = make(map[string]any)
+	}
+
+	cfgMap["github_app"] = map[string]any{
+		"app_id":           appID,
+		"installation_id":  inst.ID,
+		"private_key_path": configPath("github-app.pem"),
+	}
+
+	out, err := yaml.Marshal(cfgMap)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(cfgPath, out, 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	fmt.Printf("done!\n\n")
+
+	// ── Verify ──
+	fmt.Print("Verifying token exchange… ")
+	token, err := gh.GetInstallationToken(appID, inst.ID, pemBytes)
+	if err != nil {
+		return fmt.Errorf("token exchange failed: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("token exchange returned empty token")
+	}
+	fmt.Printf("✓ token works!\n\n")
+
+	fmt.Println("╭──────────────────────────────────────────────────────────╮")
+	fmt.Println("│                                                          │")
+	fmt.Println("│  Setup complete! The next push to a tracked repo will    │")
+	fmt.Println("│  show per-step check runs in the GitHub Checks tab.      │")
+	fmt.Println("│                                                          │")
+	fmt.Printf("│  Config: %-52s│\n", cfgPath)
+	fmt.Printf("│  Key:    %-52s│\n", configPath("github-app.pem"))
+	fmt.Println("│                                                          │")
+	fmt.Println("╰──────────────────────────────────────────────────────────╯")
+	fmt.Println()
+	return nil
+}
+
+// configPath returns a path under the shitty-ci config directory.
+func configPath(name string) string {
+	p := config.DefaultConfigPath()
+	dir := p[:len(p)-len("/config.yml")]
+	return dir + "/" + name
+}
+
+// readLine reads a trimmed line from stdin.
+func readLine() string {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	return strings.TrimSpace(scanner.Text())
+}
+
+// verifyPEM checks that the bytes look like a valid RSA private key.
+func verifyPEM(pemBytes []byte) error {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return fmt.Errorf("no PEM block found")
+	}
+	if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+		if _, err2 := x509.ParsePKCS8PrivateKey(block.Bytes); err2 != nil {
+			return fmt.Errorf("not a valid RSA private key (PKCS1: %v, PKCS8: %v)", err, err2)
+		}
+	}
+	return nil
 }
 
 func runServer() {

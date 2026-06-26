@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-const checkRunName = "shitty-ci"
-
 // MaxCheckTextOutput is GitHub's limit for check run output.text (in bytes / runes,
 // effectively 65535). We use string length which is close enough for Markdown ASCII
 // and stays safely under the wire limit.
@@ -61,15 +59,16 @@ type checkRunIDResponse struct {
 	ID int64 `json:"id"`
 }
 
-// CreateCheckRun creates a new check run on the given commit and returns its ID.
-// It starts in "in_progress" status so the UI shows activity immediately.
-func CreateCheckRun(token, owner, repo, sha, detailsURL string) (int64, error) {
+// CreateCheckRun creates a new check run with the given name on the given
+// commit and returns its ID. It starts in "in_progress" status so the UI
+// shows activity immediately.
+func CreateCheckRun(token, owner, repo, sha, checkName, detailsURL string) (int64, error) {
 	if token == "" {
 		return 0, fmt.Errorf("missing github_token")
 	}
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/check-runs", owner, repo)
 	payload := createCheckRunPayload{
-		Name:       checkRunName,
+		Name:       checkName,
 		HeadSHA:    sha,
 		Status:     "in_progress",
 		StartedAt:  time.Now().UTC().Format(time.RFC3339),

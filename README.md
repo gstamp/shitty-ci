@@ -20,7 +20,9 @@ This is made mainly just for me to resolve exactly the problem I wanted solved. 
 - **Go 1.22+** to build from source.
 - **`git`** on `PATH`.
 - **SSH access to GitHub** for the user running the daemon (repos are cloned with `git@github.com:owner/repo.git`). The daemon uses your normal environment, including `SSH_AUTH_SOCK` when present.
-- **GitHub personal access token** (optional but needed for status posting) with scope appropriate for posting statuses (for example **`repo:status`** on a classic token, or fine-grained access including **Commit statuses: Read and write**).
+- **GitHub credentials** (optional, one of the following):
+  - **GitHub personal access token** with scope appropriate for posting commit statuses (for example **`repo:status`** on a classic token, or fine-grained access including **Commit statuses: Read and write**). Statuses only, no check runs.
+  - **GitHub App** (recommended) for per-step check runs and commit statuses. No public server needed (webhooks are optional and can be disabled). See [GitHub Checks](#github-checks) below.
 
 ## Build and install
 
@@ -69,7 +71,14 @@ If the file is missing, built-in defaults apply. Example:
 poll_interval: 30s
 max_concurrent_builds: 4
 build_timeout: 30m
-github_token: "" # set to a PAT to enable status posting
+github_token: "" # set to a PAT to enable commit status posting
+
+# Recommended: GitHub App for per-step check runs + commit statuses.
+# When configured, takes precedence over github_token.
+# github_app:
+#   app_id: 123456
+#   installation_id: 789012
+#   private_key_path: /home/user/.config/shitty-ci/github-app.pem
 
 # Optional:
 # data_dir: /custom/parent   # resolved to .../shitty-ci (see below)
@@ -77,7 +86,7 @@ github_token: "" # set to a PAT to enable status posting
 # listen: "127.0.0.1:9876"  # TCP address for remote CLI access
 ```
 
-**Hot reload:** while the daemon is running, edit and save `config.yml`. The daemon notices **mtime** changes within a couple of seconds and picks up `poll_interval`, `max_concurrent_builds`, `build_timeout`, `github_token`, `data_dir`, and `workspace_ttl` without a restart. The `listen` field requires a daemon restart.
+**Hot reload:** while the daemon is running, edit and save `config.yml`. The daemon notices **mtime** changes within a couple of seconds and picks up `poll_interval`, `max_concurrent_builds`, `build_timeout`, `github_token`, `github_app`, `data_dir`, and `workspace_ttl` without a restart. The `listen` field requires a daemon restart.
 
 **Data directory:** by default everything lives under:
 
@@ -102,6 +111,7 @@ That folder holds `shitty-ci.db`, `server.sock`, `logs/`, and `workspaces/`. If 
 | `shitty-ci cancel <build-id>` | **SIGKILL** the running build’s process group |
 | `shitty-ci status` | Queue depth, running builds, limits, poll interval, data dir |
 | `shitty-ci config` | Show effective settings (token presence is boolean only) |
+| `shitty-ci github-app setup` | Interactive setup wizard for GitHub App (per-step check runs) |
 | `shitty-ci token` | Print the auth token (local only; for remote CLI setup) |
 
 If the CLI cannot connect to the socket, it prints a short hint to run `shitty-ci server` first instead of a raw errno string.
@@ -166,26 +176,84 @@ systemctl --user enable --now shitty-ci.service
 
 A reference unit is also kept in this repo at `contrib/shitty-ci.service` (paths may differ from the generated unit, which uses your current binary path).
 
-## GitHub statuses
+## GitHub integration
 
-When `github_token` is set, the daemon posts to:
+shitty-ci can report build results to GitHub in two ways:
+
+1. **Commit statuses** — a single `pending/success/failure/error` dot on the commit.
+2. **Check runs** (requires a GitHub App) — per-step expandable results in the Checks tab, with log tails, file annotations, and richer detail.
+
+### Setup
+
+**Option A: Personal access token (statuses only)**
+
+Set `github_token` in `config.yml` to a PAT with `repo:status` scope (or `Commit statuses: Read and write` for fine-grained tokens). The daemon posts to:
 
 `POST /repos/{owner}/{repo}/statuses/{sha}`
 
-Rough mapping:
+Context string: `continuous-integration/shitty-ci`.
 
-| Internal outcome | GitHub `state` | Typical description |
-|------------------|----------------|---------------------|
-| Running | `pending` | Build in progress |
-| Success | `success` | All steps passed |
-| Failure | `failure` | Step failed / misconfiguration |
-| Timed out | `error` | Includes configured timeout |
-| Cancelled | `error` | Build cancelled by user |
-| Interrupted | `error` | Daemon restarted while build was pending/running |
+**Option B: GitHub App (per-step check runs + statuses, recommended)**
 
-Context string used on GitHub: `continuous-integration/shitty-ci`.
+A GitHub App lets the Checks API create **one check run per build step**, each with its own expandable entry in the Checks tab including log tail output. The same token also posts commit statuses alongside check runs.
 
-Failure descriptions are **short** (GitHub caps them at **140 characters**), but they now include a **one-line error snippet** when available, plus a **`shitty-ci logs <build-id>`** hint so you can pull the full stdout/stderr from the daemon host. The complete trace is always in `<data-dir>/logs/<build-id>.log`.
+No public server needed — GitHub Apps do **not** require webhooks for shitty-ci's polling-based workflow.
+
+#### Creating the GitHub App
+
+Use the interactive setup wizard:
+
+```bash
+shitty-ci github-app setup
+```
+
+It will guide you through:
+1. Creating the app via a pre-filled manifest URL (open it in any browser)
+2. Pasting the temporary code back into the terminal
+3. Installing the app on your account or org
+
+The wizard automatically saves the private key, writes the config, and verifies the token exchange.
+
+To create the app manually instead:
+
+1. Go to **GitHub Settings → Developer settings → GitHub Apps → New GitHub App**.
+2. Fill in:
+   - **GitHub App name**: `shitty-ci` (or whatever you like — this appears on PRs).
+   - **Homepage URL**: `https://github.com` (required, never visited).
+   - **Webhook**: **Uncheck "Active"** — shitty-ci polls git directly, no webhooks needed.
+3. Under **Repository permissions**, set **Checks: Read & write**. The app will also inherit **Commit statuses: Read & write** automatically.
+4. Click **Create GitHub App**.
+5. **Generate a private key** (a `.pem` file downloads). Place it somewhere persistent, e.g. `~/.config/shitty-ci/github-app.pem`.
+6. **Install the app**: on the app page, go to **Install App** → install on your user or org. After installing, the URL will contain the installation ID (the number at the end).
+
+#### Configuring shitty-ci
+
+```yaml
+github_app:
+  app_id: 123456
+  installation_id: 789012
+  private_key_path: /home/you/.config/shitty-ci/github-app.pem
+```
+
+When `github_app` is configured, it takes precedence over `github_token`. You can remove `github_token` entirely — the installation token handles both check runs and commit statuses.
+
+### Status and check run mapping
+
+| Internal outcome | Commit status | Check run conclusion |
+|------------------|---------------|----------------------|
+| Running | `pending` | (in progress) |
+| Success | `success` | `success` |
+| Step failure | `failure` | `failure` with log tail |
+| Infrastructure error | `failure` | `failure` with detail |
+| Timed out | `error` | `timed_out` |
+| Cancelled | `error` | `cancelled` |
+| Interrupted | `error` | `neutral` |
+
+### Failure details
+
+Commit status descriptions are capped at **140 characters** by GitHub. They include a one-line error snippet and a `shitty-ci logs <build-id>` hint.
+
+Check run output supports up to **64 KB of Markdown** — the tail of the build log is included automatically, along with structured output (step name, error text, build ID).
 
 ## Remote access
 

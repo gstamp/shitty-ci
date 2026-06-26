@@ -12,11 +12,20 @@ import (
 	"shitty-ci/internal/xdg"
 )
 
+// GitHubAppConfig holds credentials for a GitHub App, used to authenticate
+// with the Checks API and Commit Statuses API via installation tokens.
+type GitHubAppConfig struct {
+	AppID          int64  `yaml:"app_id"`
+	InstallationID int64  `yaml:"installation_id"`
+	PrivateKeyPath string `yaml:"private_key_path"`
+}
+
 type Config struct {
 	PollInterval        time.Duration `yaml:"poll_interval"`
 	MaxConcurrentBuilds int           `yaml:"max_concurrent_builds"`
 	BuildTimeout        time.Duration `yaml:"build_timeout"`
 	GitHubToken         string        `yaml:"github_token"`
+	GitHubApp           GitHubAppConfig `yaml:"github_app,omitempty"`
 	DataDir             string        `yaml:"data_dir"`
 	WorkspaceTTL        time.Duration `yaml:"workspace_ttl"`
 	Listen              string        `yaml:"listen"`
@@ -41,13 +50,14 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	var aux struct {
-		PollInterval        string `yaml:"poll_interval"`
-		MaxConcurrentBuilds int    `yaml:"max_concurrent_builds"`
-		BuildTimeout        string `yaml:"build_timeout"`
-		GitHubToken         string `yaml:"github_token"`
-		DataDir             string `yaml:"data_dir"`
-		WorkspaceTTL        string `yaml:"workspace_ttl"`
-		Listen              string `yaml:"listen"`
+		PollInterval        string          `yaml:"poll_interval"`
+		MaxConcurrentBuilds int             `yaml:"max_concurrent_builds"`
+		BuildTimeout        string          `yaml:"build_timeout"`
+		GitHubToken         string          `yaml:"github_token"`
+		GitHubApp           GitHubAppConfig `yaml:"github_app,omitempty"`
+		DataDir             string          `yaml:"data_dir"`
+		WorkspaceTTL        string          `yaml:"workspace_ttl"`
+		Listen              string          `yaml:"listen"`
 	}
 	if err := yaml.Unmarshal(b, &aux); err != nil {
 		return Config{}, err
@@ -57,6 +67,9 @@ func Load(path string) (Config, error) {
 	}
 	if aux.GitHubToken != "" {
 		c.GitHubToken = aux.GitHubToken
+	}
+	if aux.GitHubApp.AppID > 0 || aux.GitHubApp.InstallationID > 0 || aux.GitHubApp.PrivateKeyPath != "" {
+		c.GitHubApp = aux.GitHubApp
 	}
 	if aux.DataDir != "" {
 		c.DataDir = aux.DataDir
@@ -158,6 +171,14 @@ func WriteExample(path string) error {
 max_concurrent_builds: 4
 build_timeout: 30m
 github_token: ""
+
+# Optional: GitHub App for Checks API (per-step check runs + commit statuses).
+# When configured, takes precedence over github_token for all GitHub API calls.
+# Learn more: https://docs.github.com/en/apps/creating-a-github-app
+# github_app:
+#   app_id: 123456
+#   installation_id: 789012
+#   private_key_path: /home/user/.config/shitty-ci/github-app.pem
 
 # Optional:
 # data_dir: /custom/path
