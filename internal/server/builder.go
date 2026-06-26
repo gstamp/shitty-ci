@@ -87,6 +87,9 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 	logBuildStarted(buildID, job)
 	buildClock := time.Now()
 
+	// Create a GitHub Check Run for detailed output (non-critical; falls back silently).
+	a.createCheckRun(job.Owner, job.Name, job.SHA, buildID)
+
 	var curPID atomic.Int32
 	a.setActivePID(buildID, &curPID)
 	defer a.clearActive(buildID)
@@ -115,7 +118,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		now := time.Now().Unix()
 		msg := fmt.Sprintf("git fetch failed: %v", err)
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, "", msg, now, now)
-		a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("git fetch failed: %v", err), buildID))
+		a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, "git fetch", err.Error())
 		logBuildDone(buildID, job, types.BuildFailure, msg, buildClock)
 		return
 	}
@@ -132,7 +135,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 	if err != nil {
 		now := time.Now().Unix()
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, "", "invalid .shitty-ci.yml", now, now)
-		a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("Invalid .shitty-ci.yml: %v", err), buildID))
+		a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, "config", fmt.Sprintf("Invalid .shitty-ci.yml: %v", err))
 		logBuildDone(buildID, job, types.BuildFailure, "invalid .shitty-ci.yml", buildClock)
 		return
 	}
@@ -146,14 +149,14 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 	if len(sf.Steps) == 0 {
 		now := time.Now().Unix()
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, "", "no steps in .shitty-ci.yml", now, now)
-		a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint("No steps configured", buildID))
+		a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, "config", "No steps configured")
 		logBuildDone(buildID, job, types.BuildFailure, "no steps in .shitty-ci.yml", buildClock)
 		return
 	}
 
 	// Tell GitHub we're working on this commit before checkout / long-running prep;
 	// previously the first status only appeared after prepareWorkspace finished.
-	a.postGitHub(job.Owner, job.Name, job.SHA, "pending", gh.StatusDescriptionWithLogsHint("Preparing workspace", buildID))
+	a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "in_progress", "", nil, gh.StatusDescriptionWithLogsHint("Preparing workspace", buildID))
 
 	cfg := a.store.Get()
 	timeout := cfg.BuildTimeout
@@ -182,14 +185,14 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		now := time.Now().Unix()
 		msg := fmt.Sprintf("checkout failed: %v", err)
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, "", msg, now, now)
-		a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("git checkout failed: %v", err), buildID))
+		a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, "checkout", err.Error())
 		logBuildDone(buildID, job, types.BuildFailure, msg, buildClock)
 		return
 	}
 
 	started := time.Now().Unix()
 	_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildRunning, "", "", started, 0)
-	a.postGitHub(job.Owner, job.Name, job.SHA, "pending", "Build in progress")
+	a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "in_progress", "", nil, "Build in progress")
 	logBuildRunningSteps(buildID, job)
 
 	runnable := make([]shittyyml.Step, 0, len(sf.Steps))
@@ -199,7 +202,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 			now := time.Now().Unix()
 			msg := fmt.Sprintf("invalid step ref filter: %v", err)
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, msg, started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("Invalid step filters: %v", err), buildID))
+			a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, step.Name, fmt.Sprintf("Invalid step filters: %v", err))
 			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("step %q: %s", step.Name, msg), buildClock)
 			return
 		}
@@ -217,7 +220,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		now := time.Now().Unix()
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildSuccess, "", "all steps skipped (step branch/tag filters)", now, now)
 		fmt.Fprintf(logf, "\n== finished: success (no matching steps) ==\n")
-		a.postGitHub(job.Owner, job.Name, job.SHA, "success", gh.StatusDescriptionWithLogsHint("All steps skipped (ref filters)", buildID))
+		a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "completed", "success", gh.BuildSuccessOutput(), gh.StatusDescriptionWithLogsHint("All steps skipped (ref filters)", buildID))
 		logBuildDone(buildID, job, types.BuildSuccess, "all steps skipped (step branch/tag filters)", buildClock)
 		return
 	}
@@ -226,12 +229,12 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		if step.Run == "" {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, "empty run command", started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StepFailureDescription(step.Name, "empty run command", buildID))
+			a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, step.Name, "empty run command")
 			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("empty run command for step %q", step.Name), buildClock)
 			return
 		}
 		_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildRunning, step.Name, "", started, 0)
-		a.postGitHub(job.Owner, job.Name, job.SHA, "pending", gh.StatusDescriptionWithLogsHint("Running: "+step.Name, buildID))
+		a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "in_progress", "", nil, gh.StatusDescriptionWithLogsHint("Running: "+step.Name, buildID))
 		logBuildStepProgress(buildID, job, i+1, len(runnable), step.Name)
 
 		secretEnv, err := db.GetRepoSecrets(ctx, a.db, job.RepoID)
@@ -256,7 +259,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		if err := cmd.Start(); err != nil {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, err.Error(), started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StepFailureDescription(step.Name, fmt.Sprintf("failed to start: %v", err), buildID))
+			a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, step.Name, fmt.Sprintf("failed to start: %v", err))
 			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("step %q failed to start: %v", step.Name, err), buildClock)
 			return
 		}
@@ -267,21 +270,21 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 		if a.consumeUserCancel(buildID) {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildCancelled, step.Name, "cancelled", started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "error", gh.StatusDescriptionWithLogsHint("Build cancelled by user", buildID))
+			a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "completed", "cancelled", gh.BuildCancelledOutput(), gh.StatusDescriptionWithLogsHint("Build cancelled by user", buildID))
 			logBuildDone(buildID, job, types.BuildCancelled, fmt.Sprintf("cancelled during step %q", step.Name), buildClock)
 			return
 		}
 		if buildCtx.Err() == context.DeadlineExceeded {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildTimedOut, step.Name, "timed out", started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "error", gh.StatusDescriptionWithLogsHint(fmt.Sprintf("Build timed out after %s", timeout), buildID))
+			a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "completed", "timed_out", gh.BuildTimedOutOutput(timeout.String()), gh.StatusDescriptionWithLogsHint(fmt.Sprintf("Build timed out after %s", timeout), buildID))
 			logBuildDone(buildID, job, types.BuildTimedOut, fmt.Sprintf("timed out in step %q after %s", step.Name, timeout), buildClock)
 			return
 		}
 		if waitErr != nil {
 			now := time.Now().Unix()
 			_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildFailure, step.Name, waitErr.Error(), started, now)
-			a.postGitHub(job.Owner, job.Name, job.SHA, "failure", gh.StepFailureDescription(step.Name, waitErr.Error(), buildID))
+			a.postGitHubFailure(job.Owner, job.Name, job.SHA, buildID, logPath, step.Name, waitErr.Error())
 			logBuildDone(buildID, job, types.BuildFailure, fmt.Sprintf("step %q failed: %v", step.Name, waitErr), buildClock)
 			return
 		}
@@ -290,7 +293,7 @@ func (a *App) runBuild(parent context.Context, job BuildJob) {
 	now := time.Now().Unix()
 	_ = db.UpdateBuildState(ctx, a.db, buildID, types.BuildSuccess, "", "", started, now)
 	fmt.Fprintf(logf, "\n== finished: success ==\n")
-	a.postGitHub(job.Owner, job.Name, job.SHA, "success", "All steps passed")
+	a.updateCheckRun(buildID, job.Owner, job.Name, job.SHA, "completed", "success", gh.BuildSuccessOutput(), "All steps passed")
 	logBuildDone(buildID, job, types.BuildSuccess, "", buildClock)
 }
 
@@ -312,6 +315,134 @@ func (a *App) postGitHub(owner, name, sha, state, desc string) {
 	}
 	if err := gh.PostStatus(token, owner, name, sha, state, desc, gh.CommitStatusTargetURL(owner, name, sha)); err != nil {
 		daemonLog.Printf("github status post failed for %s/%s@%s: %v", owner, name, shortSHA(sha), err)
+	}
+}
+
+// createCheckRun attempts to create a GitHub Check Run for the build and
+// stores the check run ID in the App's sync.Map keyed by buildID.
+// If the check run can't be created (e.g., token lacks checks:write scope)
+// we fall back to the commit status API silently.
+func (a *App) createCheckRun(owner, name, sha, buildID string) {
+	token := a.store.Get().GitHubToken
+	if token == "" {
+		return
+	}
+	targetURL := gh.CommitStatusTargetURL(owner, name, sha)
+	id, err := gh.CreateCheckRun(token, owner, name, sha, targetURL)
+	if err != nil {
+		daemonLog.Printf("github check run creation failed for %s/%s@%s: %v (using commit status instead)", owner, name, shortSHA(sha), err)
+		return
+	}
+	a.checkRuns.Store(buildID, id)
+}
+
+// updateCheckRun updates an existing check run for the given buildID.
+// If no check run exists for the build, it falls back to the commit status API.
+// When output is provided, it is sent as the check run's detailed output.
+func (a *App) updateCheckRun(buildID, owner, name, sha, status, conclusion string, output *gh.CheckRunOutput, statusDesc string) {
+	token := a.store.Get().GitHubToken
+	if token == "" {
+		return
+	}
+
+	// Try check run first.
+	if v, ok := a.checkRuns.Load(buildID); ok {
+		crID, ok := v.(int64)
+		if ok {
+			targetURL := gh.CommitStatusTargetURL(owner, name, sha)
+			if err := gh.UpdateCheckRun(token, owner, name, crID, status, conclusion, output, targetURL); err != nil {
+				daemonLog.Printf("github check run update failed for build %s: %v (falling back to commit status)", shortBuildID(buildID), err)
+			}
+		}
+	}
+
+	// Always post a commit status as well (it's a reliable fallback and shows up
+	// in the GitHub UI even when check runs don't).
+	if statusDesc != "" {
+		if err := gh.PostStatus(token, owner, name, sha, stateFromConclusion(conclusion, status), statusDesc, gh.CommitStatusTargetURL(owner, name, sha)); err != nil {
+			daemonLog.Printf("github status post failed for %s/%s@%s: %v", owner, name, shortSHA(sha), err)
+		}
+	}
+}
+
+// postGitHubFailure posts a detailed failure to GitHub using the Check Runs API
+// (with log tail in the output text) and falls back to the commit status API.
+// logPath is the build log file path; if non-empty, the tail is included.
+func (a *App) postGitHubFailure(owner, name, sha, buildID, logPath, stepName, errText string) {
+	token := a.store.Get().GitHubToken
+	if token == "" {
+		return
+	}
+
+	// Read log tail for detailed output.
+	var logTail string
+	if logPath != "" {
+		if data, err := gh.ReadLogTail(logPath, gh.LogTailBytes); err == nil {
+			logTail = data
+		}
+	}
+
+	output := gh.BuildFailureOutput(stepName, errText, buildID, logTail)
+
+	// Try check run first.
+	if v, ok := a.checkRuns.Load(buildID); ok {
+		crID, ok := v.(int64)
+		if ok {
+			targetURL := gh.CommitStatusTargetURL(owner, name, sha)
+			if err := gh.UpdateCheckRun(token, owner, name, crID, "completed", "failure", output, targetURL); err != nil {
+				daemonLog.Printf("github check run update failed for build %s: %v (falling back to commit status)", shortBuildID(buildID), err)
+			}
+		}
+	}
+
+	// Always post a commit status fallback.
+	desc := gh.StepFailureDescription(stepName, errText, buildID)
+	if err := gh.PostStatus(token, owner, name, sha, "failure", desc, gh.CommitStatusTargetURL(owner, name, sha)); err != nil {
+		daemonLog.Printf("github status post failed for %s/%s@%s: %v", owner, name, shortSHA(sha), err)
+	}
+}
+
+// stateFromConclusion maps a check run conclusion to a commit status API state.
+// When conclusion is empty (still in progress), it returns the check run status
+// mapped to a valid commit status value: "in_progress" → "pending", anything else
+// is passed through as-is or defaults to "pending".
+func stateFromConclusion(conclusion, checkRunStatus string) string {
+	if conclusion != "" {
+		switch conclusion {
+		case "success":
+			return "success"
+		case "failure":
+			return "failure"
+		case "neutral", "cancelled", "timed_out", "action_required":
+			return "error"
+		default:
+			return "error"
+		}
+	}
+	// No conclusion means still in progress.
+	switch checkRunStatus {
+	case "in_progress", "queued":
+		return "pending"
+	default:
+		return "pending"
+	}
+}
+
+// buildFinishedConclusion maps an internal BuildState to a Check Run conclusion.
+func buildFinishedConclusion(state types.BuildState) string {
+	switch state {
+	case types.BuildSuccess:
+		return "success"
+	case types.BuildFailure:
+		return "failure"
+	case types.BuildTimedOut:
+		return "timed_out"
+	case types.BuildCancelled:
+		return "cancelled"
+	case types.BuildInterrupted:
+		return "neutral"
+	default:
+		return "neutral"
 	}
 }
 

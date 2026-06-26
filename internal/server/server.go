@@ -53,6 +53,9 @@ type App struct {
 
 	activeMu sync.Mutex
 	active   map[string]*activeBuild
+
+	// checkRuns maps build IDs to GitHub Check Run IDs for detailed output.
+	checkRuns sync.Map
 }
 
 type activeBuild struct {
