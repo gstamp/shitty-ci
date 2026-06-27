@@ -505,6 +505,18 @@ func (a *App) postStepFailure(owner, name, sha, buildID, logPath, stepName, errT
 	if err := gh.PostStatus(token, owner, name, sha, "failure", desc, gh.CommitStatusTargetURL(owner, name, sha)); err != nil {
 		daemonLog.Printf("github status post failed for %s/%s@%s: %v", owner, name, shortSHA(sha), err)
 	}
+
+	a.updateCheckRun(
+		buildID,
+		owner,
+		name,
+		sha,
+		"completed",
+		"failure",
+		output,
+		gh.StatusDescriptionWithLogsHint("A build step failed", buildID),
+		-1,
+	)
 }
 
 // stateFromConclusion maps a check run conclusion to a commit status API state.
