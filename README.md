@@ -12,7 +12,7 @@ This is made mainly just for me to resolve exactly the problem I wanted solved. 
 - **SQLite** state (tracked repos, refs, builds, workspace pool).
 - **YAML config** with hot reload when the file changes.
 - **Per-repo** `.shitty-ci.yml` in the repo (read from the commit being built).
-- **Workspace pool** with `git checkout --force` + `git clean -fd` between builds (keeps typical dependency caches that live in ignored dirs).
+- **Workspace pool** with `git checkout --force` + `git clean -ffdx` between builds (removes untracked files, ignored files, and nested untracked repositories).
 - **GitHub commit statuses** (`pending` / `success` / `failure` / `error`) via the REST API.
 
 ## Requirements

@@ -567,11 +567,11 @@ func prepareWorkspace(wsPath, sha string, logf *os.File) error {
 	if _, err := gitutil.RunGit(wsPath, "checkout", "--force", sha); err != nil {
 		return err
 	}
-	if _, err := gitutil.RunGit(wsPath, "clean", "-fd"); err != nil {
+	if _, err := gitutil.RunGit(wsPath, "clean", "-ffdx"); err != nil {
 		return err
 	}
 	if logf != nil {
-		fmt.Fprintf(logf, "checked out %s and cleaned (-fd)\n", sha)
+		fmt.Fprintf(logf, "checked out %s and cleaned (-ffdx)\n", sha)
 	}
 	return nil
 }
