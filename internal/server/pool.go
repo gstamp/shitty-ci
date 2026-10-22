@@ -117,7 +117,9 @@ func (a *App) pruneWorkspaces(ctx context.Context, ttl time.Duration) error {
 			continue
 		}
 		path := filepath.Join(a.workspaceRoot(), dir)
-		_ = os.RemoveAll(path)
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove pruned workspace %q: %w", path, err)
+		}
 		if err := db.DeleteWorkspaceRow(ctx, a.db, id); err != nil {
 			return err
 		}

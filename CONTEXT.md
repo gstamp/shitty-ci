@@ -89,7 +89,7 @@ Builds run natively on the host machine — no Docker containers.
 _Avoid_: Docker, containers, VMs for build isolation
 
 **Workspaces**:
-Each tracked repo has a dynamically-sized pool of persistent checkout directories. Before a build, the workspace is cleaned via `git checkout --force <sha>` + `git clean -ffdx`, removing untracked files, ignored files, and nested untracked repositories. Idle workspaces (>24h untouched) are pruned by a background goroutine.
+Each tracked repo has a dynamically-sized pool of persistent checkout directories. Before a build, the workspace is cleaned via `git checkout --force <sha>` + `git clean -fd`; ignored files stay as caches between builds. When an idle workspace is pruned (>24h untouched) or a repo is removed, its whole directory is deleted, including ignored files.
 _Avoid_: Fresh `git clone` per build, single workspace per repo that blocks
 
 ## Build Configuration

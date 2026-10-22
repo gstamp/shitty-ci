@@ -731,7 +731,10 @@ func (a *App) removeRepoDisk(ctx context.Context, owner, name string) error {
 	}
 	root := a.workspaceRoot()
 	for _, w := range ws {
-		_ = os.RemoveAll(filepath.Join(root, w.DirName))
+		path := filepath.Join(root, w.DirName)
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove workspace %q: %w", path, err)
+		}
 	}
 	return nil
 }
